@@ -6,6 +6,7 @@ use ark_ff::{Field, UniformRand, Zero, One};
 use rand::{CryptoRng, Rng};
 
 /// Structure of the recipients
+#[derive(Clone)]
 pub struct Recipient<E: PairingEngine> {
     /// identifier
     identifier: usize,
@@ -13,7 +14,36 @@ pub struct Recipient<E: PairingEngine> {
     key_pair: KeyPair<E>,
 }
 
+impl<E: PairingEngine> Recipient<E> {
+    pub fn decrypt(
+        &self,
+        set_recipients: Vec<usize>,
+        channel: BroadcastChannel<E>,
+        ctx_0: E::G1Projective,
+        ctx_1: E::G2Projective,
+    ) -> E::Fqk
+    {
+        let mut K = E::pairing(ctx_0, self.key_pair.public_key.point_q);
+
+        let mut g_1point_second_pairing = self.key_pair.private_key.key;
+
+        for index in set_recipients.iter() {
+            if *index == self.identifier {
+                continue
+            }
+
+            g_1point_second_pairing += channel.broadcaster_pk_g1[channel.number_participants - index + self.identifier];
+        }
+
+        let denominator_pairing = E::pairing(g_1point_second_pairing, ctx_1);
+        K /= denominator_pairing;
+
+        return K
+    }
+}
+
 /// Key pair of recipients.
+#[derive(Clone)]
 pub struct KeyPair<E: PairingEngine> {
     /// public key
     public_key: PublicKey<E>,
@@ -22,24 +52,26 @@ pub struct KeyPair<E: PairingEngine> {
 }
 
 /// Public key
+#[derive(Clone)]
 pub struct PublicKey<E:PairingEngine> {
     point_q: E::G2Projective,
 }
 
 /// Private key
+#[derive(Clone)]
 pub struct PrivateKey<E: PairingEngine> {
     key: E::G1Projective,
 }
 
 /// Broadcast channel. This is initiated by the trusted party, and includes all recipients
 pub struct BroadcastChannel<E: PairingEngine> {
-    participants: Vec<Recipient<E>>,
+    number_participants: usize,
     broadcaster_pk_g1: Vec<E::G1Projective>,
     broadcaster_pk_g2: Vec<E::G2Projective>,
 }
 
 impl<E: PairingEngine> BroadcastChannel<E> {
-    pub fn init_participants<R>(n: usize, rng: &mut R,) -> Vec<Recipient<E>>
+    pub fn init_participants<R>(n: usize, rng: &mut R,) -> (Self, Vec<Recipient<E>>)
     where
         R: Rng + CryptoRng,
     {
@@ -92,7 +124,39 @@ impl<E: PairingEngine> BroadcastChannel<E> {
             });
         }
 
-        participants
+        // we append the V vector to the G1 points. This is not super elegant, but functional
+        p_points_vec.push(point_v);
+
+        let parameters = BroadcastChannel {
+            number_participants: n,
+            broadcaster_pk_g1: p_points_vec,
+            broadcaster_pk_g2: q_points_vec[..2].to_vec(),
+        };
+
+        (parameters, participants)
+    }
+
+    pub fn encrypt<R>(&self, set_recipients: Vec<usize>, rng: &mut R) -> (E::G1Projective, E::G2Projective, E::Fqk)
+    where
+        R: Rng + CryptoRng,
+    {
+        let k = E::Fr::rand(rng);
+        let mut g_2_point = self.broadcaster_pk_g2[1];
+        g_2_point *= k;
+        let mut K = E::pairing(self.broadcaster_pk_g1[self.number_participants], g_2_point);
+
+        let mut point_in_g2 = self.broadcaster_pk_g2[0];
+        point_in_g2 *= k;
+
+        let mut point_in_g1 = self.broadcaster_pk_g1[self.number_participants + 1];
+
+        for index in set_recipients.iter() {
+            point_in_g1 += self.broadcaster_pk_g1[self.number_participants - index];
+        }
+
+        point_in_g1 *= k;
+
+        return (point_in_g1, point_in_g2, K)
     }
 }
 
@@ -110,8 +174,18 @@ mod tests {
         let number_participants = 10usize;
         let mut rng = thread_rng();
 
-        let participants = BroadcastChannel::<Bls12_381>::init_participants(number_participants, &mut rng);
+        let (channel, participants) = BroadcastChannel::<Bls12_381>::init_participants(number_participants, &mut rng);
 
-        assert_eq!(participants.len(), number_participants)
+        assert_eq!(participants.clone().len(), number_participants);
+
+        let recipients = vec![1,3,5];
+
+        let (ctx_0, ctx_1, ctx_2) = channel.encrypt(recipients.clone(), &mut rng);
+
+        let participant_1: Recipient<Bls12_381> = participants[0].clone();
+
+        let dec_key = participant_1.decrypt(recipients, channel, ctx_0, ctx_1);
+
+        assert_eq!(ctx_2, dec_key)
     }
 }
