@@ -32,7 +32,7 @@ impl<E: PairingEngine> Recipient<E> {
                 continue
             }
 
-            g_1point_second_pairing += channel.broadcaster_pk_g1[channel.number_participants - index + self.identifier];
+            g_1point_second_pairing += channel.broadcaster_pk_g1[channel.number_participants + 1 - index + self.identifier];
         }
 
         let denominator_pairing = E::pairing(g_1point_second_pairing, ctx_1);
@@ -82,7 +82,9 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         // vectors containing the generated points
         let mut p_points_vec: Vec<E::G1Projective> = Vec::new();
+        p_points_vec.push(generator_p.clone());
         let mut q_points_vec: Vec<E::G2Projective> = Vec::new();
+        q_points_vec.push(generator_q);
 
         // counter to keep the state of each multiplication by \alpha
         let mut counter_p = generator_p.clone();
@@ -94,7 +96,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         }
 
         // now we remove values at position n + 1
-        p_points_vec.remove(n+1);
+        // p_points_vec.remove(n+1);
 
         for _ in 0..n {
             counter_q *= alpha;
@@ -108,7 +110,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         let mut participants: Vec<Recipient<E>> = Vec::new();
 
-        for i in 0..n {
+        for i in 1..(n+1) {
             let mut secret_key = p_points_vec[i];
             secret_key *= gamma;
 
@@ -119,7 +121,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
             participants.push(
                 Recipient{
-                identifier: i + 1,
+                identifier: i,
                 key_pair
             });
         }
@@ -145,18 +147,18 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         g_2_point *= k;
         let mut K = E::pairing(self.broadcaster_pk_g1[self.number_participants], g_2_point);
 
-        let mut point_in_g2 = self.broadcaster_pk_g2[0];
-        point_in_g2 *= k;
+        let mut header_point_in_g2 = self.broadcaster_pk_g2[0];
+        header_point_in_g2 *= k;
 
-        let mut point_in_g1 = self.broadcaster_pk_g1[self.number_participants + 1];
+        let mut header_point_in_g1 = *self.broadcaster_pk_g1.last().unwrap();
 
         for index in set_recipients.iter() {
-            point_in_g1 += self.broadcaster_pk_g1[self.number_participants - index];
+            header_point_in_g1 += self.broadcaster_pk_g1[self.number_participants + 1 - index];
         }
 
-        point_in_g1 *= k;
+        header_point_in_g1 *= k;
 
-        return (point_in_g1, point_in_g2, K)
+        return (header_point_in_g1, header_point_in_g2, K)
     }
 }
 
